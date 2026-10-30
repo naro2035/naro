@@ -1,0 +1,20 @@
+{
+  "name": "naro",
+  "version": "0.2.0",
+  "private": true,
+  "license": "AGPL-3.0-only",
+  "type": "module",
+  "workspaces": [
+    "apps/web",
+    "packages/protocol"
+  ],
+  "scripts": {
+    "dev": "npm run dev -w @naro/web",
+    "build": "npm run build -w @naro/protocol && npm run build -w @naro/web",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "typescript": "^5.8.3",
+    "vitest": "^3.1.1"
+  }
+}
