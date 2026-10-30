@@ -61,6 +61,9 @@ export default function App() {
         tags: [],
         content: text.trim(),
       });
+      if (event.pubkey !== key || event.kind !== 1 || event.content !== text.trim()) {
+        throw new Error("A carteira retornou um evento diferente do conteúdo assinado.");
+      }
       const result = await publishToRelays(event);
       setText("");
       setNotice(
