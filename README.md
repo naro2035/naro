@@ -1,54 +1,26 @@
-# Naro
+# NARO
 
 Rede social descentralizada baseada no protocolo Nostr.
 
-## Visão do projeto
+## Versão 0.2
 
-O Naro é uma aplicação independente que utiliza identidades Nostr e uma rede de relays independentes para permitir publicação e comunicação sem depender de um servidor central único.
+Fundação web com React + TypeScript, integração de identidade por carteira NIP-07, feed de eventos Nostr, múltiplos relays independentes e validação criptográfica de eventos recebidos.
 
-## Arquitetura
+## Instalação
 
-```text
-                    NARO
-                      |
-             Aplicativo independente
-                      |
-                Identidade Nostr
-                      |
-             Camada de comunicação
-                      |
-          +-----------+-----------+
-          |           |           |
-        Relay A     Relay B     Relay C
-          |           |           |
-       Região A    Região B    Região C
+Requisitos: Node.js 20+ e npm 10+.
+
+```bash
+npm install
+npm run dev
 ```
 
-## Funcionalidades planejadas
+Verificações: `npm test` e `npm run build`.
 
-- Criar ou importar identidade Nostr.
-- Feed de publicações (eventos Nostr).
-- Publicar textos e links.
-- Responder, reagir e republicar.
-- Conectar a múltiplos relays configuráveis.
-- Interface responsiva para celular e computador.
-- Controles de privacidade e segurança.
+## Segurança
 
-## Princípios técnicos
+A aplicação não recebe nem armazena chaves privadas. A assinatura é delegada à carteira NIP-07. Relays são serviços independentes; disponibilidade e retenção variam.
 
-- Compatibilidade com os eventos e relays do protocolo Nostr.
-- Identidade controlada pelo usuário.
-- Nenhuma chave privada deve ser enviada ao servidor ou commitada neste repositório.
-- Relays são independentes; a disponibilidade e a retenção de eventos dependem de cada relay.
+## Licença
 
-## Etapas de desenvolvimento
-
-1. Definir a estrutura da aplicação e a experiência inicial.
-2. Implementar conexão Nostr e gerenciamento seguro de identidade.
-3. Construir feed, publicação, respostas e reações.
-4. Adicionar configuração de múltiplos relays.
-5. Criar testes automatizados e documentação de implantação.
-
-## Estado atual
-
-Projeto iniciado. As funcionalidades acima são o escopo planejado e serão implementadas e testadas incrementalmente.
+AGPL-3.0-only.
