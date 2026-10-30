@@ -23,4 +23,4 @@ A aplicação não recebe nem armazena chaves privadas. A assinatura é delegada
 
 ## Licença
 
-AGPL-3.0-only.
+AGPL-3.0-only (GNU Affero General Public License versão 3, sem versões posteriores).
