@@ -1,4 +1,4 @@
-import { verifyEvent } from "nostr-tools";
+import { getEventHash, verifyEvent } from "nostr-tools";
 
 export interface NaroEvent { id:string; pubkey:string; created_at:number; kind:number; tags:string[][]; content:string; sig:string }
 export type RelayStatus = "connecting" | "connected" | "disconnected" | "error";
@@ -9,7 +9,7 @@ export function isValidEvent(value:unknown): value is NaroEvent {
  if (!value || typeof value !== "object") return false;
  const e=value as Partial<NaroEvent>;
  if (typeof e.id!=="string" || !/^[0-9a-f]{64}$/i.test(e.id) || typeof e.pubkey!=="string" || !/^[0-9a-f]{64}$/i.test(e.pubkey) || typeof e.sig!=="string" || !/^[0-9a-f]{128}$/i.test(e.sig) || typeof e.content!=="string" || !Number.isSafeInteger(e.created_at) || (e.created_at as number)<0 || !Number.isSafeInteger(e.kind) || (e.kind as number)<0 || !Array.isArray(e.tags) || !e.tags.every(t=>Array.isArray(t)&&t.every(v=>typeof v==="string"))) return false;
- try { return verifyEvent(e as NaroEvent); } catch { return false; }
+ try { return getEventHash(e as NaroEvent) === e.id && verifyEvent(e as NaroEvent); } catch { return false; }
 }
 
 export class NaroRelay {
