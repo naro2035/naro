@@ -1,37 +1,240 @@
 import { getEventHash, verifyEvent } from "nostr-tools";
 
-export interface NaroEvent { id:string; pubkey:string; created_at:number; kind:number; tags:string[][]; content:string; sig:string }
-export type RelayStatus = "connecting" | "connected" | "disconnected" | "error";
-export const DEFAULT_RELAYS = ["wss://relay.damus.io","wss://nos.lol","wss://relay.nostr.band"] as const;
-type Handler = (event:NaroEvent)=>void;
+export interface NaroEvent {
+  id: string;
+  pubkey: string;
+  created_at: number;
+  kind: number;
+  tags: string[][];
+  content: string;
+  sig: string;
+}
 
-export function isValidEvent(value:unknown): value is NaroEvent {
- if (!value || typeof value !== "object") return false;
- const e=value as Partial<NaroEvent>;
- if (typeof e.id!=="string" || !/^[0-9a-f]{64}$/i.test(e.id) || typeof e.pubkey!=="string" || !/^[0-9a-f]{64}$/i.test(e.pubkey) || typeof e.sig!=="string" || !/^[0-9a-f]{128}$/i.test(e.sig) || typeof e.content!=="string" || !Number.isSafeInteger(e.created_at) || (e.created_at as number)<0 || !Number.isSafeInteger(e.kind) || (e.kind as number)<0 || !Array.isArray(e.tags) || !e.tags.every(t=>Array.isArray(t)&&t.every(v=>typeof v==="string"))) return false;
- try { return getEventHash(e as NaroEvent) === e.id && verifyEvent(e as NaroEvent); } catch { return false; }
+export type RelayStatus = "connecting" | "connected" | "disconnected" | "error";
+
+export const DEFAULT_RELAYS = [
+  "wss://relay.damus.io",
+  "wss://nos.lol",
+  "wss://relay.nostr.band",
+] as const;
+
+type Handler = (event: NaroEvent) => void;
+const SUBSCRIPTION_ID = "naro-feed";
+const CONNECTION_TIMEOUT_MS = 10_000;
+const PUBLISH_TIMEOUT_MS = 10_000;
+
+export function isValidEvent(value: unknown): value is NaroEvent {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+
+  const event = value as Partial<NaroEvent>;
+  if (
+    typeof event.id !== "string" ||
+    !/^[0-9a-f]{64}$/i.test(event.id) ||
+    typeof event.pubkey !== "string" ||
+    !/^[0-9a-f]{64}$/i.test(event.pubkey) ||
+    typeof event.sig !== "string" ||
+    !/^[0-9a-f]{128}$/i.test(event.sig) ||
+    typeof event.content !== "string" ||
+    !Number.isSafeInteger(event.created_at) ||
+    (event.created_at as number) < 0 ||
+    !Number.isSafeInteger(event.kind) ||
+    (event.kind as number) < 0 ||
+    !Array.isArray(event.tags) ||
+    !event.tags.every(
+      (tag) => Array.isArray(tag) && tag.every((item) => typeof item === "string"),
+    )
+  ) {
+    return false;
+  }
+
+  try {
+    return getEventHash(event as NaroEvent) === event.id && verifyEvent(event as NaroEvent);
+  } catch {
+    return false;
+  }
 }
 
 export class NaroRelay {
- private socket?:WebSocket; private stopped=false; private retry=0; private timer?:ReturnType<typeof setTimeout>; private readonly subId="naro-feed";
- constructor(public readonly url:string, private readonly onEvent:Handler, private readonly onStatus?:(s:RelayStatus)=>void) {}
- connect():Promise<void> {
-  this.stopped=false;
-  return new Promise((resolve,reject)=>{
-   let settled=false; const ws=new WebSocket(this.url); this.socket=ws; this.onStatus?.("connecting");
-   const timeout=setTimeout(()=>{if(!settled){settled=true;ws.close();reject(new Error("Tempo esgotado ao conectar ao relay"));}},10000);
-   ws.onopen=()=>{this.retry=0;this.onStatus?.("connected");ws.send(JSON.stringify(["REQ",this.subId,{kinds:[0,1,3],limit:50}]));if(!settled){settled=true;clearTimeout(timeout);resolve();}};
-   ws.onmessage=msg=>{try{const d=JSON.parse(String(msg.data));if(Array.isArray(d)&&d[0]==="EVENT"&&d[1]===this.subId&&isValidEvent(d[2]))this.onEvent(d[2]);}catch{/* ignora frame inválido */}};
-   ws.onerror=()=>{this.onStatus?.("error");if(!settled){settled=true;clearTimeout(timeout);reject(new Error("Falha de conexão com relay"));}};
-   ws.onclose=()=>{this.onStatus?.("disconnected");if(!this.stopped)this.reconnect();};
-  });
- }
- private reconnect(){if(this.timer||this.stopped)return;const delay=Math.min(30000,1000*2**this.retry++);this.timer=setTimeout(()=>{this.timer=undefined;if(!this.stopped)void this.connect().catch(()=>undefined);},delay);}
- close(){this.stopped=true;if(this.timer)clearTimeout(this.timer);this.timer=undefined;if(this.socket){if(this.socket.readyState===WebSocket.OPEN)this.socket.send(JSON.stringify(["CLOSE",this.subId]));this.socket.close();}}
+  private socket?: WebSocket;
+  private stopped = false;
+  private retry = 0;
+  private reconnectTimer?: ReturnType<typeof setTimeout>;
+
+  constructor(
+    public readonly url: string,
+    private readonly onEvent: Handler,
+    private readonly onStatus?: (status: RelayStatus) => void,
+  ) {}
+
+  connect(): Promise<void> {
+    this.stopped = false;
+
+    return new Promise((resolve, reject) => {
+      let settled = false;
+      let timeout: ReturnType<typeof setTimeout>;
+
+      const settle = (error?: Error) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timeout);
+        if (error) reject(error);
+        else resolve();
+      };
+
+      let socket: WebSocket;
+      try {
+        socket = new WebSocket(this.url);
+      } catch (error) {
+        this.onStatus?.("error");
+        reject(error instanceof Error ? error : new Error("Falha ao criar conexão"));
+        return;
+      }
+
+      this.socket = socket;
+      this.onStatus?.("connecting");
+
+      timeout = setTimeout(() => {
+        settle(new Error("Tempo esgotado ao conectar ao relay"));
+        socket.close();
+      }, CONNECTION_TIMEOUT_MS);
+
+      socket.onopen = () => {
+        try {
+          socket.send(JSON.stringify(["REQ", SUBSCRIPTION_ID, { kinds: [1], limit: 50 }]));
+          this.retry = 0;
+          this.onStatus?.("connected");
+          settle();
+        } catch {
+          this.onStatus?.("error");
+          settle(new Error("Falha ao iniciar assinatura no relay"));
+          socket.close();
+        }
+      };
+
+      socket.onmessage = (message) => {
+        try {
+          const data = JSON.parse(String(message.data));
+          if (
+            Array.isArray(data) &&
+            data[0] === "EVENT" &&
+            data[1] === SUBSCRIPTION_ID &&
+            isValidEvent(data[2]) &&
+            data[2].kind === 1
+          ) {
+            this.onEvent(data[2]);
+          }
+        } catch {
+          // Frames inválidos são ignorados.
+        }
+      };
+
+      socket.onerror = () => {
+        this.onStatus?.("error");
+        settle(new Error("Falha de conexão com relay"));
+      };
+
+      socket.onclose = () => {
+        this.onStatus?.("disconnected");
+        settle(new Error("Conexão com relay encerrada antes de completar"));
+        if (!this.stopped) this.scheduleReconnect();
+      };
+    });
+  }
+
+  private scheduleReconnect() {
+    if (this.reconnectTimer || this.stopped) return;
+
+    const delay = Math.min(30_000, 1_000 * 2 ** this.retry++);
+    this.reconnectTimer = setTimeout(() => {
+      this.reconnectTimer = undefined;
+      if (!this.stopped) void this.connect().catch(() => undefined);
+    }, delay);
+  }
+
+  close() {
+    this.stopped = true;
+    if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
+    this.reconnectTimer = undefined;
+
+    const socket = this.socket;
+    this.socket = undefined;
+    if (!socket) return;
+
+    if (socket.readyState === WebSocket.OPEN) {
+      try {
+        socket.send(JSON.stringify(["CLOSE", SUBSCRIPTION_ID]));
+      } catch {
+        // O socket pode ter fechado entre a checagem e o envio.
+      }
+    }
+    socket.close();
+  }
 }
 
-export async function publishEvent(url:string,event:unknown):Promise<void>{
- const ws=new WebSocket(url);
- await new Promise<void>((resolve,reject)=>{const timeout=setTimeout(()=>{ws.close();reject(new Error("Tempo esgotado ao publicar"));},10000);ws.onopen=()=>ws.send(JSON.stringify(["EVENT",event]));ws.onmessage=m=>{try{const d=JSON.parse(String(m.data));if(Array.isArray(d)&&d[0]==="OK"){clearTimeout(timeout);ws.close();d[2]===true?resolve():reject(new Error(String(d[3]??"Relay rejeitou o evento")));}}catch{/* espera OK */}};ws.onerror=()=>{clearTimeout(timeout);reject(new Error("Erro de rede"));};});
+export async function publishEvent(url: string, event: unknown): Promise<void> {
+  if (!isValidEvent(event)) {
+    throw new Error("Evento Nostr inválido ou assinatura não confere");
+  }
+
+  await new Promise<void>((resolve, reject) => {
+    const socket = new WebSocket(url);
+    let settled = false;
+
+    const finish = (error?: Error) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      socket.onopen = null;
+      socket.onmessage = null;
+      socket.onerror = null;
+      socket.onclose = null;
+      socket.close();
+      if (error) reject(error);
+      else resolve();
+    };
+
+    const timeout = setTimeout(
+      () => finish(new Error("Tempo esgotado ao publicar")),
+      PUBLISH_TIMEOUT_MS,
+    );
+
+    socket.onopen = () => {
+      try {
+        socket.send(JSON.stringify(["EVENT", event]));
+      } catch {
+        finish(new Error("Falha ao enviar evento ao relay"));
+      }
+    };
+
+    socket.onmessage = (message) => {
+      try {
+        const data = JSON.parse(String(message.data));
+        if (Array.isArray(data) && data[0] === "OK" && data[1] === event.id) {
+          if (data[2] === true) finish();
+          else finish(new Error(String(data[3] ?? "Relay rejeitou o evento")));
+        }
+      } catch {
+        // Aguarda uma resposta OK válida.
+      }
+    };
+
+    socket.onerror = () => finish(new Error("Erro de rede ao publicar"));
+    socket.onclose = () => finish(new Error("Conexão encerrada antes da confirmação"));
+  });
 }
-export async function publishToRelays(event:unknown,urls:readonly string[]=DEFAULT_RELAYS){const results=await Promise.allSettled(urls.map(url=>publishEvent(url,event)));const accepted=results.filter(r=>r.status==="fulfilled").length;if(!accepted)throw new Error("Nenhum relay aceitou a publicação");return {accepted,total:urls.length};}
+
+export async function publishToRelays(
+  event: unknown,
+  urls: readonly string[] = DEFAULT_RELAYS,
+) {
+  if (!isValidEvent(event)) {
+    throw new Error("Evento Nostr inválido ou assinatura não confere");
+  }
+  if (urls.length === 0) throw new Error("Nenhum relay configurado");
+
+  const results = await Promise.allSettled(urls.map((url) => publishEvent(url, event)));
+  const accepted = results.filter((result) => result.status === "fulfilled").length;
+
+  if (!accepted) throw new Error("Nenhum relay aceitou a publicação");
+  return { accepted, total: urls.length };
+}
